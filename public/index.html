@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Truck GPS Kontrol</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet/dist/leaflet.css" />
+    <style>
+        #map {
+            height: 70vh;
+        }
+        #json-data {
+            margin-top: 20px;
+            white-space: pre-wrap;
+            background-color: #f4f4f4;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Truck GPS Kontrol</h1>
+    <div>
+        <label for="truck-id">Truck ID:</label>
+        <input type="text" id="truck-id" placeholder="Truck ID girin">
+        <button id="start-truck">Başlat</button>
+        <button id="stop-truck">Durdur</button>
+        <button id="show-truck-data">Veriyi Göster</button>
+        <button id="show-all-trucks">Tüm Araçları Göster</button> 
+        <button id="show-inactive-trucks">Pasif Araçları Göster</button> 
+    </div>
+    <div id="map"></div>
+    <div id="json-data"></div>
+
+    <script>
+        const map = L.map('map').setView([36.953879, 34.999076], 11);
+
+        // OpenStreetMap ile harita ekleme
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        // Truck marker'ları takip etmek için
+        const markers = {}; 
+        // Truck'ın durumlarını takip etmek için (aktif veya pasif)
+        const truckStatus = {}; 
+        // Girilen truck ID'yi tutacak değişken
+        let selectedTruckId = null; 
+        // Tüm markerları tutacağız
+        const allMarkers = []; 
+        // Yeşil icon: Aktif truck
+        const activeIcon = L.icon({
+            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png', 
+            iconSize: [25, 41],  
+            iconAnchor: [12, 41],  
+            popupAnchor: [1, -34]  
+        });
+
+        // Kırmızı icon: Pasif truck
+        const inactiveIcon = L.icon({
+            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', 
+            iconSize: [25, 41],  
+            iconAnchor: [12, 41],  
+            popupAnchor: [1, -34]  
+        });
+
+        // Yeşil icon: Aktif truck
+        const updateJsonData = (data) => {
+            const jsonDataElement = document.getElementById('json-data');
+            jsonDataElement.textContent = JSON.stringify(data, null, 2); // JSON verisini formatlı şekilde ekrana yazdır
+        };
+
+        // WebSocket ile veri almak için
+        const socket = new WebSocket('ws://localhost:8080'); // WebSocket sunucusuna bağlantı
+
+        socket.onopen = function() {
+            console.log("WebSocket bağlantısı açıldı.");
+        };
+         // Gelen veriyi JSON formatında al
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const { truckId, latitude, longitude, timestamp } = data;
+
+            // Eğer girilen truck ID ile gelen truck ID eşleşiyorsa
+            if (selectedTruckId === truckId || selectedTruckId === null) {
+                // Truck'ın aktif olup olmadığını kontrol et
+                const isActive = truckStatus[truckId] === true;
+
+                // Eğer marker varsa, konumu ve popup içeriğini güncelle
+                if (markers[truckId]) {
+                    markers[truckId].setLatLng([latitude, longitude]);
+
+                    // Aktifse timestamp göstermiyoruz, pasifse timestamp'i gösteriyoruz
+                    const popupContent = isActive 
+                        ? `Truck: ${truckId}<br>Lat: ${latitude}<br>Long: ${longitude}` 
+                        : `Truck: ${truckId}<br>Last Timestamp: ${timestamp}<br>Lat: ${latitude}<br>Long: ${longitude}`;
+
+                    markers[truckId].setPopupContent(popupContent);
+                } else {
+                    // Yeni bir marker oluştur ve popup içeriği ekle
+                    const popupContent = isActive 
+                        ? `Truck: ${truckId}<br>Lat: ${latitude}<br>Long: ${longitude}` 
+                        : `Truck: ${truckId}<br>Last Timestamp: ${timestamp}<br>Lat: ${latitude}<br>Long: ${longitude}`;
+
+                    // Iconu aktif ya da pasif olarak belirle
+                    markers[truckId] = L.marker([latitude, longitude], { icon: isActive ? activeIcon : inactiveIcon })
+                        .addTo(map)
+                        .bindPopup(popupContent);
+
+                    // Tüm markerları tutacak diziye ekle
+                    allMarkers.push(markers[truckId]);
+                }
+
+                // Ekranda JSON verisini güncelle
+                updateJsonData(data);
+            }
+        };
+
+        socket.onerror = function(error) {
+            console.error('WebSocket Error:', error);
+        };
+
+        socket.onclose = function() {
+            console.log('WebSocket bağlantısı kapandı');
+        };
+
+        // Veriyi Göster butonuna tıklandığında sadece seçilen truck'ı haritada göster
+        document.getElementById('show-truck-data').addEventListener('click', () => {
+            const truckId = document.getElementById('truck-id').value.trim();
+            if (truckId) {
+                selectedTruckId = truckId; // Seçilen truck ID'yi sakla
+
+                // Tüm markerları haritadan kaldır
+                allMarkers.forEach(marker => marker.remove());
+
+                // Sadece seçilen truck'ı tekrar haritaya ekle
+                if (markers[truckId]) {
+                    markers[truckId].addTo(map);
+                } else {
+                    alert('Seçilen truck henüz haritada görünmüyor!');
+                }
+            } else {
+                alert('Lütfen bir Truck ID girin!');
+            }
+        });
+
+        // Tüm araçları göster butonuna tıklandığında
+        document.getElementById('show-all-trucks').addEventListener('click', () => {
+            selectedTruckId = null; // Tüm araçları göstermek için truckId'yi null yap
+
+            // Tüm markerları haritaya ekle
+            allMarkers.forEach(marker => marker.addTo(map));
+        });
+
+        // Pasif araçları göster butonuna tıklandığında
+        document.getElementById('show-inactive-trucks').addEventListener('click', () => {
+            selectedTruckId = null; // Pasif araçları göstermek için truckId'yi null yap
+
+            // Haritadaki tüm markerları temizle
+            allMarkers.forEach(marker => marker.remove());
+
+            // Sadece pasif araçları haritaya ekle
+            for (const truckId in markers) {
+                if (truckStatus[truckId] === false) {
+                    markers[truckId].addTo(map);
+                }
+            }
+        });
+
+        // Truck başlatma butonuna tıklandığında
+        document.getElementById('start-truck').addEventListener('click', () => {
+            const truckId = document.getElementById('truck-id').value.trim();
+            if (truckId) {
+                // Truck'ı başlat ve durumu aktif yap
+                axios.post('/start-truck', { truckId })
+                    .then(response => {
+                        truckStatus[truckId] = true; // Truck aktif oldu
+                        alert(response.data.message);
+                    })
+                    .catch(error => alert(error.response.data.message));
+            } else {
+                alert('Lütfen bir Truck ID girin!');
+            }
+        });
+
+        // Truck durdurma butonuna tıklandığında
+        document.getElementById('stop-truck').addEventListener('click', () => {
+            const truckId = document.getElementById('truck-id').value.trim();
+            if (truckId) {
+                axios.post('/stop-truck', { truckId })
+                    .then(response => {
+                        // Durumunu pasif yap
+                        truckStatus[truckId] = false; // Truck pasif oldu
+
+                        // Server'dan dönen son timestamp ve konum verileri
+                        const { latitude, longitude, timestamp } = response.data;
+
+                        // Marker'ı bul ve popup içeriğini güncelle
+                        if (markers[truckId]) {
+                            markers[truckId].setPopupContent(
+                                `Truck: ${truckId}<br>Last Timestamp: ${timestamp}<br>Lat: ${latitude}<br>Long: ${longitude}`
+                            );
+                        }
+
+                        alert(response.data.message); // Başarı mesajını göster
+                    })
+                    .catch(error => alert(error.response ? error.response.data.message : "Hata oluştu")); // Hata mesajını göster
+            } else {
+                alert('Lütfen bir Truck ID girin!');
+            }
+        });
+    </script>
+</body>
+</html>
